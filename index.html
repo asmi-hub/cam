@@ -1,0 +1,478 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>RTSP实时画面</title>
+    <style>
+        /* 全局样式重置 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* 页面主体样式 */
+        .page-container {
+            font-family: sans-serif;
+            min-height: 100vh;
+            padding: 20px;
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradientAnimation 15s ease infinite;
+            background-attachment: fixed;
+            position: relative;
+        }
+
+        /* 暗色蒙版层 - 默认隐藏，通过类控制显示，保留平滑过渡 */
+        .page-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5); /* 50%透明度黑色蒙版 */
+            z-index: 1;
+            pointer-events: none; /* 不影响交互 */
+            opacity: 0; /* 默认隐藏 */
+            transition: opacity 0.8s ease; /* 平滑过渡效果 */
+        }
+
+        /* 显示蒙版的类 */
+        .page-container.show-mask::before {
+            opacity: 1;
+        }
+
+        .page-content {
+            position: relative;
+            z-index: 2;
+            text-align: center;
+            color: white;
+            text-shadow: 0 0 6px rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            gap: 20px;
+        }
+
+        @keyframes gradientAnimation {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        /* 视频容器样式 */
+        .video-container-group {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 100%;
+            max-width: 380px;
+        }
+
+        .video-modal {
+            position: relative;
+            background-color: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 
+                0 8px 30px rgba(0, 0, 0, 0.4),
+                0 4px 15px rgba(0, 0, 0, 0.3),
+                inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+            width: 100%;
+            aspect-ratio: 16 / 9;
+        }
+
+        .iframe-wrapper {
+            position: absolute;
+            inset: 0;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* 视频封面样式 */
+        .video-cover-container {
+            position: absolute;
+            inset: 0;
+            z-index: 10;
+            pointer-events: auto;
+            cursor: pointer;
+            transition: opacity 0.3s ease;
+        }
+
+        .cover-loading {
+            position: absolute;
+            inset: 0;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1;
+            overflow: hidden;
+        }
+
+        /* 粒子风暴加载动画样式 */
+        .particle-storm {
+            position: absolute;
+            inset: 0;
+        }
+
+        .p-storm {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border-radius: 50%;
+            opacity: 0;
+            animation: stormFly linear infinite;
+            will-change: transform, opacity;
+        }
+
+        .p-storm.cyan    { background: #00ffff; box-shadow: 0 0 8px #00ffff; }
+        .p-storm.purple  { background: #9d00ff; box-shadow: 0 0 8px #9d00ff; }
+        .p-storm.blue    { background: #1e90ff; box-shadow: 0 0 8px #1e90ff; }
+        .p-storm.white   { background: #ffffff; box-shadow: 0 0 5px #ffffff; }
+
+        @keyframes stormFly {
+            0% {
+                transform: translate(-50%, -50%) scale(0);
+                opacity: 0;
+            }
+            15% {
+                transform: translate(-50%, -50%) scale(1);
+                opacity: 1;
+            }
+            85% {
+                opacity: 1;
+            }
+            100% {
+                transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(0);
+                opacity: 0;
+            }
+        }
+
+        .storm-core {
+            position: relative;
+            width: 70px;
+            height: 70px;
+            z-index: 2;
+        }
+
+        .storm-ring {
+            position: absolute;
+            inset: 0;
+            border: 2px solid transparent;
+            border-radius: 50%;
+            animation: stormRotate 3s linear infinite;
+        }
+
+        .storm-ring:nth-child(1) {
+            border-block-color: #00ffff;
+            animation-duration: 2s;
+        }
+
+        .storm-ring:nth-child(2) {
+            inset: 10%;
+            border-inline-color: #9d00ff;
+            animation-duration: 2.5s;
+            animation-direction: reverse;
+        }
+
+        .storm-ring:nth-child(3) {
+            inset: 20%;
+            border-block-color: #1e90ff;
+            animation-duration: 1.5s;
+        }
+
+        @keyframes stormRotate {
+            to { transform: rotate(360deg); }
+        }
+
+        /* 视频封面图样式 */
+        .video-cover {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            z-index: 2;
+            transition: opacity 0.5s ease;
+            opacity: 0;
+        }
+
+        .video-cover.loaded {
+            opacity: 1;
+        }
+
+        .video-cover-container.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* 错误提示样式 */
+        .video-error-overlay {
+            position: absolute;
+            inset: 0;
+            background-color: rgba(0, 0, 0, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 15;
+            color: #fff;
+            font-size: 14px;
+            text-align: center;
+            padding: 20px;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .video-error-overlay.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .video-error-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+            color: #ff6b6b;
+        }
+
+        /* 响应式适配 */
+        @media screen and (orientation: landscape) {
+            .video-container-group {
+                max-width: 420px;
+            }
+        }
+
+        /* 视频iframe样式 */
+        .video-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+            z-index: 5;
+            min-width: 100%;
+            min-height: 100%;
+        }
+
+        /* iOS设备特殊样式 */
+        @supports (-webkit-touch-callout: none) {
+            .ios-device .video-iframe {
+                position: relative;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 页面主容器 -->
+    <div class="page-container" id="pageContainer">
+        <div class="page-content">
+            <div class="video-container-group" id="videoContainerGroup"></div>
+        </div>
+    </div>
+
+    <script>
+        // 配置参数
+        const CONFIG = {
+            videos: [
+                { id: 1, streamUrl: 'http://rocks.osmi.cc:11984/stream.html?src=cam1', coverUrl: 'http://rocks.osmi.cc:11984/api/frame.jpeg?src=cam1', errorText: '视频1加载失败' },
+                { id: 2, streamUrl: 'http://rocks.osmi.cc:7084/stream.html?src=Cam', coverUrl: 'http://rocks.osmi.cc:7084/api/frame.jpeg?src=Cam', errorText: '视频2加载失败' },
+                { id: 3, streamUrl: 'http://rocks.osmi.cc:11984/stream.html?src=cam2', coverUrl: 'http://rocks.osmi.cc:11984/api/frame.jpeg?src=cam2', errorText: '视频3加载失败' },
+                { id: 4, streamUrl: 'http://rocks.osmi.cc:11984/stream.html?src=%E5%9C%BA%E5%8C%BA%E4%BA%A4%E9%80%9A', coverUrl: 'http://rocks.osmi.cc:11984/api/frame.jpeg?src=%E5%9C%BA%E5%8C%BA%E4%BA%A4%E9%80%9A', errorText: '视频4加载失败' }
+            ],
+            particle: {
+                count: 40,
+                minSize: 1.5,
+                maxSize: 4.5,
+                minDuration: 2.5,
+                maxDuration: 5,
+                minDistance: 80,
+                maxDistance: 200,
+                colors: ['cyan', 'purple', 'blue', 'white']
+            }
+        };
+
+        // DOM元素和状态管理
+        const dom = {
+            containerGroup: document.getElementById('videoContainerGroup'),
+            pageContainer: document.getElementById('pageContainer'),
+            videoElements: {}
+        };
+
+        // 工具函数
+        const utils = {
+            // iOS检测
+            isIOS: () => /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream,
+            // 获取DOM元素ID
+            getId: (prefix, id) => `${prefix}-${id}`,
+            // 生成随机数
+            random: (min, max) => min + Math.random() * (max - min),
+            // 精准获取北京时间（UTC+8）的小时数
+            getBeijingHour: () => {
+                const now = new Date();
+                // 计算UTC时间 + 8小时 = 北京时间
+                const utcHour = now.getUTCHours();
+                const beijingHour = (utcHour + 8) % 24;
+                return beijingHour;
+            },
+            // 判断是否需要显示蒙版（18:00 ~ 次日6:00 显示）
+            shouldShowMask: () => {
+                const hour = utils.getBeijingHour();
+                return hour >= 18 || hour < 6;
+            }
+        };
+
+        // 初始化蒙版显示状态
+        function initMask() {
+            if (utils.shouldShowMask()) {
+                dom.pageContainer.classList.add('show-mask');
+            } else {
+                dom.pageContainer.classList.remove('show-mask');
+            }
+        }
+
+        // 初始化
+        function init() {
+            // 初始化蒙版（核心：仅执行一次，无定时刷新）
+            initMask();
+            // 生成视频容器
+            generateVideoContainers();
+            // 绑定事件
+            bindEvents();
+            // iOS适配
+            if (utils.isIOS()) document.documentElement.classList.add('ios-device');
+            // 初始化封面和粒子动画
+            initVideoCovers();
+        }
+
+        // 生成视频容器
+        function generateVideoContainers() {
+            CONFIG.videos.forEach(video => {
+                const modal = document.createElement('div');
+                modal.className = 'video-modal';
+                modal.innerHTML = `
+                    <div class="video-cover-container" id="${utils.getId('video-cover-container', video.id)}">
+                        <div class="cover-loading">
+                            <div class="particle-storm" id="${utils.getId('storm', video.id)}"></div>
+                            <div class="storm-core">
+                                <div class="storm-ring"></div>
+                                <div class="storm-ring"></div>
+                                <div class="storm-ring"></div>
+                            </div>
+                        </div>
+                        <div class="video-cover" id="${utils.getId('video-cover', video.id)}" style="background-image: url('${video.coverUrl}');"></div>
+                    </div>
+                    <div class="video-error-overlay" id="${utils.getId('error-overlay', video.id)}">
+                        <div class="video-error-icon">⚠️</div>
+                        <div>${video.errorText}</div>
+                    </div>
+                    <div class="iframe-wrapper">
+                        <iframe class="video-iframe" id="${utils.getId('video-iframe', video.id)}" src="" allow="fullscreen *; autoplay *; encrypted-media *"></iframe>
+                    </div>
+                `;
+                
+                dom.containerGroup.appendChild(modal);
+                
+                // 缓存元素引用
+                dom.videoElements[video.id] = {
+                    iframe: document.getElementById(utils.getId('video-iframe', video.id)),
+                    coverContainer: document.getElementById(utils.getId('video-cover-container', video.id)),
+                    cover: document.getElementById(utils.getId('video-cover', video.id)),
+                    errorOverlay: document.getElementById(utils.getId('error-overlay', video.id)),
+                    storm: document.getElementById(utils.getId('storm', video.id)),
+                    ...video
+                };
+
+                // 绑定iframe错误事件
+                dom.videoElements[video.id].iframe.onerror = () => {
+                    dom.videoElements[video.id].errorOverlay.classList.add('show');
+                };
+            });
+        }
+
+        // 绑定事件
+        function bindEvents() {
+            CONFIG.videos.forEach(video => {
+                dom.videoElements[video.id].coverContainer.addEventListener('click', () => {
+                    playVideo(video.id);
+                });
+            });
+        }
+
+        // 创建粒子动画
+        function createParticleStorm(stormEl) {
+            if (!stormEl) return;
+            
+            stormEl.innerHTML = '';
+            const { particle } = CONFIG;
+            
+            for (let i = 0; i < particle.count; i++) {
+                const p = document.createElement('div');
+                const size = utils.random(particle.minSize, particle.maxSize);
+                const dur = utils.random(particle.minDuration, particle.maxDuration);
+                const angle = Math.random() * Math.PI * 2;
+                const dist = utils.random(particle.minDistance, particle.maxDistance);
+                
+                p.className = `p-storm ${particle.colors[Math.floor(Math.random() * particle.colors.length)]}`;
+                p.style.cssText = `
+                    width: ${size}px;
+                    height: ${size}px;
+                    animation-duration: ${dur}s;
+                    animation-delay: ${(Math.random() * 3).toFixed(2)}s;
+                    --tx: ${Math.cos(angle) * dist}px;
+                    --ty: ${Math.sin(angle) * dist}px;
+                `;
+                
+                stormEl.appendChild(p);
+            }
+        }
+
+        // 预加载封面
+        function preloadCoverImage(coverEl, url) {
+            const img = new Image();
+            img.src = url;
+            img.onload = img.onerror = () => coverEl.classList.add('loaded');
+        }
+
+        // 初始化视频封面
+        function initVideoCovers() {
+            CONFIG.videos.forEach(video => {
+                createParticleStorm(dom.videoElements[video.id].storm);
+                preloadCoverImage(dom.videoElements[video.id].cover, video.coverUrl);
+            });
+        }
+
+        // 视频控制
+        function playVideo(playId) {
+            // 隐藏所有错误提示
+            CONFIG.videos.forEach(video => {
+                dom.videoElements[video.id].errorOverlay.classList.remove('show');
+            });
+            
+            // 播放指定视频，停止其他
+            CONFIG.videos.forEach(video => {
+                const el = dom.videoElements[video.id];
+                if (video.id === playId) {
+                    el.coverContainer.classList.add('hidden');
+                    el.iframe.src = el.streamUrl;
+                } else {
+                    el.iframe.src = '';
+                    el.coverContainer.classList.remove('hidden');
+                }
+            });
+        }
+
+        // 页面加载完成后初始化
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
